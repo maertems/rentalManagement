@@ -1,0 +1,41 @@
+# Scripts utilitaires.
+#
+# Utilise network_mode: host pour accéder à MySQL sur 127.0.0.1:3306
+# (le port est exposé par le docker-compose de l'API).
+#
+# Usage :
+#
+#   # Premier build (une seule fois, ou après modif des scripts)
+#   docker-compose build
+#
+#   # Vider la base (confirmation interactive)
+#   docker-compose run --rm reset
+#
+#   # Vider la base sans confirmation
+#   docker-compose run --rm reset --force
+#
+#   # Générer une quittance pour un locataire et un mois donnés
+#   docker-compose run --rm generate-receipt --tenant-id 42 --month 2026-04
+#
+#   # Tester sans rien écrire en base
+#   docker-compose run --rm generate-receipt --tenant-id 42 --month 2026-04 --dry-run
+
+services:
+
+  reset:
+    build: .
+    network_mode: host
+    stdin_open: true
+    tty: true
+    entrypoint:
+      - python
+      - reset_database.py
+
+  generate-receipt:
+    build: .
+    network_mode: host
+    volumes:
+      - ../data/api/.env:/app/.env:ro
+    entrypoint:
+      - python
+      - generate_receipt.py

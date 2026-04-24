@@ -1,0 +1,24 @@
+# Données persistantes (ne jamais committer)
+data/
+
+# Environnements secrets (le .env est dans data/, déjà couvert ci-dessus)
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# Node
+build/front/node_modules/
+build/front/dist/
+
+# Archives / ancienne version + migration PocketBase
+oldVersion/
+poketBase/
+scripts/import_pocketbase.py
+
+# OS
+.DS_Store
+Thumbs.db
