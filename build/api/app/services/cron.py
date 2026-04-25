@@ -277,9 +277,13 @@ async def run_daily_receipt_generation() -> None:
                 # Pas le bon jour pour ce propriétaire
                 continue
 
+            # L'avis d'échéance généré le 25 avril concerne le loyer de MAI → mois suivant
+            next_period = _next_period_begin(today.year, today.month)
+            target_year, target_month = next_period.year, next_period.month
+
             logger.info(
-                "[cron] Owner %d (%s) : jour de génération %d → traitement",
-                owner.id, owner.name, clamped_day,
+                "[cron] Owner %d (%s) : jour de génération %d → traitement pour %d-%02d",
+                owner.id, owner.name, clamped_day, target_year, target_month,
             )
 
             # Tous les biens → logements → locataires actifs
@@ -305,12 +309,12 @@ async def run_daily_receipt_generation() -> None:
                     ).scalars().all()
 
                     for tenant in tenants:
-                        if await _receipt_exists(db, tenant.id, today.year, today.month):
+                        if await _receipt_exists(db, tenant.id, target_year, target_month):
                             logger.info(
                                 "    Tenant %d : quittance déjà présente pour %d-%02d, ignoré",
-                                tenant.id, today.year, today.month,
+                                tenant.id, target_year, target_month,
                             )
                             continue
-                        await _create_receipt_for_tenant(db, tenant, today.year, today.month)
+                        await _create_receipt_for_tenant(db, tenant, target_year, target_month)
 
     logger.info("[cron] daily_receipt_generation — terminé")
