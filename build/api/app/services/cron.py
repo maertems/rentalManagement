@@ -242,6 +242,7 @@ async def _create_receipt_for_tenant(
                 pdf_bytes=pdf_bytes,
                 pdf_filename=ctx.filename,
                 extra_attachments=extra_attachments,
+                property_name=f"{ctx.unit_zip}-{ctx.place_name}",
             )
             logger.info("    %s: email avis d'échéance envoyé à %s", label, tenant.email)
         except Exception as exc:

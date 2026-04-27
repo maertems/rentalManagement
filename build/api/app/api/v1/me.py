@@ -311,6 +311,7 @@ async def send_test_email(
                     pdf_bytes=_pdf,
                     pdf_filename=_ctx.filename,
                     extra_attachments=_extra,
+                    property_name=f"{_ctx.unit_zip}-{_ctx.place_name}",
                 ),
             )
             sent.append(f"{label} ({receipt_info})")

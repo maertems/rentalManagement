@@ -212,6 +212,7 @@ async def validate_withdrawal(
             body=body,
             pdf_bytes=pdf_bytes,
             pdf_filename=ctx.filename,
+            property_name=f"{ctx.unit_zip}-{ctx.place_name}",
         )
 
     return {"status": 100, "log": log}
