@@ -187,7 +187,7 @@ async def send_receipt_email(
     id: int,
     background_tasks: BackgroundTasks,
     force: bool = Query(default=False, description="Envoyer même si sendNoticeOfLeaseRental=0"),
-    doc_type: str | None = Query(default=None, description="Forcer le type : quittance | avis | garantie"),
+    doc_type: str = Query(description="Type de document : quittance | avis | garantie"),
     db: AsyncSession = Depends(get_db),
     owner_ctx: Owner | None = Depends(get_owner_context),
 ):
@@ -228,18 +228,17 @@ async def send_receipt_email(
     year = period_begin.year if period_begin else ""
     tenant_name = " ".join(filter(None, [tenant.firstName, tenant.name]))
 
-    is_quittance = (doc_type == "quittance") or (doc_type is None and (ctx.paid or ctx.is_garantie))
-    is_garantie = (doc_type == "garantie") or (doc_type is None and ctx.is_garantie)
-
-    if is_garantie:
+    if doc_type == "garantie":
         subject = "Reçu de garantie"
         body = f"Bonjour,\n\nVous trouverez ci-joint le reçu du dépot de garantie.\nVous souhaitant bonne réception.\n\nBonne journée,\n{ctx.owner_name}\n"
-    elif is_quittance:
+    elif doc_type == "quittance":
         subject = "Quittance de loyer"
         body = f"Bonjour,\n\nVous trouverez ci-joint la quittance pour le loyer du mois de {month_name} {year}.\nVous souhaitant bonne réception.\n\nBonne journée,\n{ctx.owner_name}\n"
-    else:
+    elif doc_type == "avis":
         subject = "Avis d'échéance"
         body = f"Bonjour,\n\nVous trouverez ci-joint l'avis d'échéance du mois de {month_name} {year}.\nVous souhaitant bonne réception.\n\nBonne journée,\n{ctx.owner_name}\n"
+    else:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"doc_type invalide '{doc_type}'. Valeurs acceptées : quittance, avis, garantie")
 
     if ctx.unit_name:
         subject += f" - {ctx.unit_name}"
