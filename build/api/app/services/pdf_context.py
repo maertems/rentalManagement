@@ -97,10 +97,14 @@ def _sanitize(s: str | None) -> str:
 def _build_filename(
     unit_zip: str, place_name: str, unit_name: str,
     period_begin: datetime | None, doc_type: str,
+    room_name: str | None = None,
 ) -> str:
     import re
     month = period_begin.strftime("%Y-%m") if period_begin else "0000-00"
-    raw = f"{unit_zip}-{place_name}-{unit_name}.{month}.{doc_type}.pdf"
+    if room_name:
+        raw = f"{unit_zip}-{place_name}-{unit_name}-{room_name}-{month}-{doc_type}.pdf"
+    else:
+        raw = f"{unit_zip}-{place_name}-{unit_name}-{month}-{doc_type}.pdf"
     return re.sub(r"\s+", "", raw)
 
 
@@ -179,12 +183,13 @@ async def get_receipt_context(
     if not owner:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Owner not found")
 
-    # Unit name: use room name if flatshare, otherwise unit.name (same logic as old PHP)
+    # Unit name + optional room name for filename
     unit_name_for_file = _sanitize(unit.name or f"unit{unit.id}")
+    room_name_for_file: str | None = None
     if unit.flatshare and tenant.placeUnitRoomId:
         room = await db.get(PlacesUnitsRoom, tenant.placeUnitRoomId)
         if room and room.name:
-            unit_name_for_file = _sanitize(room.name)
+            room_name_for_file = _sanitize(room.name)
 
     # Billing address: use tenant billing if different, else unit address
     if tenant.billingSameAsRental:
@@ -212,6 +217,7 @@ async def get_receipt_context(
         unit_name=unit_name_for_file,
         period_begin=receipt.periodBegin,
         doc_type=doc_type,
+        room_name=room_name_for_file,
     )
 
     return ReceiptContext(
