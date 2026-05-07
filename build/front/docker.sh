@@ -5,6 +5,13 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ENV_FILE="$PROJECT_ROOT/data/front/.env"
+
+VITE_API_BASE_URL="http://localhost:8000"
+if [ -f "$ENV_FILE" ]; then
+  VITE_API_BASE_URL=$(grep -E "^VITE_API_BASE_URL=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+fi
 
 echo "Arrêt et suppression du container existant..."
 docker stop rental_front 2>/dev/null || true
@@ -20,7 +27,7 @@ docker run -d \
   -v "$SCRIPT_DIR:/app" \
   -v /app/node_modules \
   -e CHOKIDAR_USEPOLLING=true \
-  -e VITE_API_BASE_URL="http://localhost:8000" \
+  -e VITE_API_BASE_URL="$VITE_API_BASE_URL" \
   rental_front
 
 echo "Frontend démarré sur http://localhost:5173"

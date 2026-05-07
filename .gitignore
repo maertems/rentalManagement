@@ -1,5 +1,7 @@
 # Données persistantes (ne jamais committer)
-data/
+data/**/.env
+data/api/files/
+data/mysql/
 
 # Environnements secrets (le .env est dans data/, déjà couvert ci-dessus)
 
