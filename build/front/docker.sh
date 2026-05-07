@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-ENV_FILE="$PROJECT_ROOT/data/front/.env"
+ENV_FILE="$PROJECT_ROOT/data/api/.env"
 
 VITE_API_BASE_URL="http://localhost:8000"
 if [ -f "$ENV_FILE" ]; then
