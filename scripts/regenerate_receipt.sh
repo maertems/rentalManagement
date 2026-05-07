@@ -4,7 +4,7 @@
 # Usage :
 #   ./regenerate_receipt.sh --tenant-id 42 --month 2026-04
 #   ./regenerate_receipt.sh --tenant-id 42 --month 2026-04 --force
-#   ./regenerate_receipt.sh --tenant-id 42 --month 2026-04 --send-email
+#   ./regenerate_receipt.sh --tenant-id 42 --month 2026-04 --type quittance --send-email
 #   ./regenerate_receipt.sh --tenant-id 42 --month 2026-04 --dry-run
 #
 # Prérequis : curl, jq
@@ -33,6 +33,7 @@ MONTH=""
 FORCE=false
 SEND_EMAIL=false
 DRY_RUN=false
+DOC_TYPE=""
 
 # --- Parsing des arguments ---
 while [[ $# -gt 0 ]]; do
@@ -41,6 +42,7 @@ while [[ $# -gt 0 ]]; do
         --month)       MONTH="$2";      shift 2 ;;
         --api-url)     API_URL="$2";    shift 2 ;;
         --api-email)   API_EMAIL="$2";  shift 2 ;;
+        --type)        DOC_TYPE="$2";   shift 2 ;;
         --force)       FORCE=true;      shift ;;
         --send-email)  SEND_EMAIL=true; shift ;;
         --dry-run)     DRY_RUN=true;    shift ;;
@@ -49,7 +51,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$TENANT_ID" ] || [ -z "$MONTH" ]; then
-    echo "Usage : $0 --tenant-id ID --month YYYY-MM [--force] [--send-email] [--dry-run]"
+    echo "Usage : $0 --tenant-id ID --month YYYY-MM [--type quittance|avis] [--force] [--send-email] [--dry-run]"
+    exit 1
+fi
+
+if [ -n "$DOC_TYPE" ] && [[ "$DOC_TYPE" != "quittance" && "$DOC_TYPE" != "avis" && "$DOC_TYPE" != "garantie" ]]; then
+    echo "Erreur : --type doit être quittance, avis ou garantie"
     exit 1
 fi
 
@@ -87,7 +94,7 @@ auth_login() {
 }
 
 echo "=== Regénération de quittance ==="
-echo "Locataire : $TENANT_ID | Mois : $MONTH | Force PDF : $FORCE | Email : $SEND_EMAIL"
+echo "Locataire : $TENANT_ID | Mois : $MONTH | Type : ${DOC_TYPE:-auto} | Force PDF : $FORCE | Email : $SEND_EMAIL"
 echo ""
 
 if auth_check; then
@@ -123,10 +130,12 @@ fi
 
 # --- Régénération du PDF ---
 echo "Génération du PDF..."
-FORCE_PARAM=""
-[ "$FORCE" = true ] && FORCE_PARAM="?force=true"
+PDF_PARAMS=""
+[ "$FORCE" = true ] && PDF_PARAMS="force=true"
+[ -n "$DOC_TYPE" ] && PDF_PARAMS="${PDF_PARAMS:+$PDF_PARAMS&}doc_type=${DOC_TYPE}"
+[ -n "$PDF_PARAMS" ] && PDF_PARAMS="?${PDF_PARAMS}"
 PDF_RESP=$(curl -s -X POST -b "$COOKIE_FILE" \
-    "$API_URL/api/v1/rentReceipts/${RECEIPT_ID}/pdf${FORCE_PARAM}")
+    "$API_URL/api/v1/rentReceipts/${RECEIPT_ID}/pdf${PDF_PARAMS}")
 PDF_FILENAME=$(echo "$PDF_RESP" | jq -r '.filename // empty')
 if [ -z "$PDF_FILENAME" ] || [ "$PDF_FILENAME" = "null" ]; then
     echo "Erreur génération PDF : $PDF_RESP"
@@ -137,8 +146,10 @@ echo "  → $PDF_FILENAME"
 # --- Envoi email ---
 if [ "$SEND_EMAIL" = true ]; then
     echo "Envoi de l'email..."
+    EMAIL_PARAMS="force=true"
+    [ -n "$DOC_TYPE" ] && EMAIL_PARAMS="${EMAIL_PARAMS}&doc_type=${DOC_TYPE}"
     EMAIL_RESP=$(curl -s -X POST -b "$COOKIE_FILE" \
-        "$API_URL/api/v1/rentReceipts/${RECEIPT_ID}/email?force=true")
+        "$API_URL/api/v1/rentReceipts/${RECEIPT_ID}/email?${EMAIL_PARAMS}")
     SENT=$(echo "$EMAIL_RESP" | jq -r '.sent // empty')
     if [ "$SENT" = "true" ]; then
         TO=$(echo "$EMAIL_RESP" | jq -r '.to // ""')
