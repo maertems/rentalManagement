@@ -7,12 +7,15 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+echo "Arrêt et suppression du container existant..."
+docker stop rental_api 2>/dev/null || true
+docker rm rental_api 2>/dev/null || true
+
 echo "Build de l'image rental_api..."
 docker build -t rental_api "$SCRIPT_DIR"
 
 docker run -d \
   --name rental_api \
-  --network rental \
   --restart unless-stopped \
   -p 8000:8000 \
   --env-file "$PROJECT_ROOT/data/api/.env" \

@@ -7,9 +7,11 @@ set -e
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
+docker stop rental_mysql 2>/dev/null || true
+docker rm rental_mysql 2>/dev/null || true
+
 docker run -d \
   --name rental_mysql \
-  --network rental \
   --restart unless-stopped \
   -e MYSQL_ROOT_PASSWORD=rootpassword \
   -e MYSQL_DATABASE=rental \

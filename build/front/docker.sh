@@ -6,6 +6,10 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+echo "Arrêt et suppression du container existant..."
+docker stop rental_front 2>/dev/null || true
+docker rm rental_front 2>/dev/null || true
+
 echo "Build de l'image rental_front..."
 docker build -t rental_front "$SCRIPT_DIR"
 
