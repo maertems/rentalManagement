@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 25
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
+    EMAIL_PROPERTY_HEADER: str = "X-rental-property"
 
 
 settings = Settings()

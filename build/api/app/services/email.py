@@ -31,7 +31,7 @@ def send_pdf_email_sync(
     """
     Envoie un email avec un PDF en pièce jointe (synchrone).
     extra_attachments : liste de (contenu, nom_fichier) pour les PJ supplémentaires.
-    property_name     : valeur du header X-rental-property (ex: "75001-Rivoli").
+    property_name     : valeur du header configuré via EMAIL_PROPERTY_HEADER (ex: "75001-Rivoli").
     À utiliser dans un BackgroundTask FastAPI ou via run_in_executor.
     """
     smtp_host = settings.SMTP_HOST
@@ -45,7 +45,7 @@ def send_pdf_email_sync(
     msg["Cc"] = from_addr
     msg["Subject"] = subject
     if property_name:
-        msg["X-rental-property"] = property_name
+        msg[settings.EMAIL_PROPERTY_HEADER] = property_name
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
