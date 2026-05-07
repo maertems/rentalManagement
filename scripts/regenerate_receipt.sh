@@ -50,12 +50,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ -z "$TENANT_ID" ] || [ -z "$MONTH" ]; then
-    echo "Usage : $0 --tenant-id ID --month YYYY-MM [--type quittance|avis] [--force] [--send-email] [--dry-run]"
+if [ -z "$TENANT_ID" ] || [ -z "$MONTH" ] || [ -z "$DOC_TYPE" ]; then
+    echo "Usage : $0 --tenant-id ID --month YYYY-MM --type quittance|avis|garantie [--force] [--send-email] [--dry-run]"
     exit 1
 fi
 
-if [ -n "$DOC_TYPE" ] && [[ "$DOC_TYPE" != "quittance" && "$DOC_TYPE" != "avis" && "$DOC_TYPE" != "garantie" ]]; then
+if [[ "$DOC_TYPE" != "quittance" && "$DOC_TYPE" != "avis" && "$DOC_TYPE" != "garantie" ]]; then
     echo "Erreur : --type doit être quittance, avis ou garantie"
     exit 1
 fi
