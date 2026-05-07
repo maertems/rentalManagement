@@ -96,9 +96,9 @@ function PlaceCard({ place, gracePeriod }: { place: OccupancyPlace; gracePeriod:
             return (
               <div
                 key={unit.unitId}
-                className={`min-w-[220px] flex-1 rounded-md border${paid ? " bg-green-50" : ""}`}
+                className="min-w-[220px] flex-1 rounded-md border"
               >
-                <div className={`flex items-center justify-between px-3 py-1.5 text-sm font-medium${paid ? "" : " bg-muted/20"}`}>
+                <div className={`flex items-center justify-between px-3 py-1.5 text-sm font-medium${paid ? " bg-green-50" : " bg-muted/20"}`}>
                   <span>
                     {unit.friendlyName || unit.unitName || `Logement #${unit.unitId}`}
                     {unit.level && (
