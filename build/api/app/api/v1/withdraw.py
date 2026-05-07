@@ -134,7 +134,7 @@ async def validate_withdrawal(
     place = await db.get(Place, unit.placeId) if unit else None
     owner = await db.get(Owner, place.ownerId) if place else None
 
-    unit_friendly = (unit.friendlyName or unit.name or "") if unit else ""
+    unit_friendly = (unit.friendlyName or "") if unit else ""
     owner_email = (owner.email or "") if owner else ""
     owner_name = (owner.name or "") if owner else ""
     tenant_email = tenant.email or ""

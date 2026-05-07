@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.api.deps import get_current_user, get_owner_context
 from app.crud.rentReceipt import crud_rent_receipt
 from app.models.owner import Owner
+from app.models.placesUnit import PlacesUnit
 from app.models.tenant import Tenant
 from app.schemas.rentReceipt import (
     RentReceiptCreate, RentReceiptUpdate, RentReceiptRead, RentReceiptFilter,
@@ -240,8 +241,9 @@ async def send_receipt_email(
     else:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"doc_type invalide '{doc_type}'. Valeurs acceptées : quittance, avis, garantie")
 
-    if ctx.unit_name:
-        subject += f" - {ctx.unit_name}"
+    unit_obj = await db.get(PlacesUnit, tenant.placeUnitId) if tenant.placeUnitId else None
+    if unit_obj and unit_obj.friendlyName:
+        subject += f" - {unit_obj.friendlyName}"
 
     background_tasks.add_task(
         send_pdf_email_sync,
