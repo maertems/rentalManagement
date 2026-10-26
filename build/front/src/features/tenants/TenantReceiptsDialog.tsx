@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, Eye, Receipt, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, Eye, FilePlus2, Receipt, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -10,9 +10,11 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   useDeleteRentReceipt,
   useDownloadReceiptPdf,
+  useGenerateRentReceipt,
   useReceiptDetails,
   useTenantReceipts,
   useUpdateRentReceipt,
@@ -190,9 +192,26 @@ function ReceiptRow({ r }: { r: RentReceipt }) {
   );
 }
 
+function currentMonth(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export function TenantReceiptsDialog({ open, onOpenChange, tenant }: Props) {
   const { data, isLoading } = useTenantReceipts(open && tenant ? tenant.id : null);
   const [showFees, setShowFees] = useState(false);
+  const [month, setMonth] = useState(currentMonth);
+  const generateMut = useGenerateRentReceipt();
+
+  async function handleGenerate() {
+    if (!tenant) return;
+    try {
+      const r = await generateMut.mutateAsync({ tenantId: tenant.id, month });
+      toast.success(`Quittance créée pour ${month} (${formatCurrency(r.amount)})`);
+    } catch (err) {
+      toast.error(getApiErrorMessage(err));
+    }
+  }
 
   const fullName = tenant
     ? [tenant.firstName, tenant.name].filter(Boolean).join(" ")
@@ -200,7 +219,10 @@ export function TenantReceiptsDialog({ open, onOpenChange, tenant }: Props) {
 
   function handleClose(v: boolean) {
     onOpenChange(v);
-    if (!v) setShowFees(false);
+    if (!v) {
+      setShowFees(false);
+      setMonth(currentMonth());
+    }
   }
 
   return (
@@ -220,6 +242,25 @@ export function TenantReceiptsDialog({ open, onOpenChange, tenant }: Props) {
               </Button>
             </div>
           </DialogHeader>
+
+          <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+            <span className="text-sm text-muted-foreground">Nouvelle quittance pour</span>
+            <Input
+              type="month"
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+              className="h-8 w-auto"
+            />
+            <Button
+              size="sm"
+              onClick={() => void handleGenerate()}
+              disabled={generateMut.isPending || !month}
+              title="Crée l'entrée en base (loyers actifs + frais du mois), sans PDF"
+            >
+              <FilePlus2 className="mr-1 h-4 w-4" />
+              {generateMut.isPending ? "Création…" : "Générer"}
+            </Button>
+          </div>
 
           {isLoading ? (
             <div className="py-8 text-center text-muted-foreground">Chargement…</div>

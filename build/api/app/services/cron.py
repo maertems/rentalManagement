@@ -98,11 +98,28 @@ async def _receipt_exists(
 # Génération pour un locataire
 # ---------------------------------------------------------------------------
 
-async def _create_receipt_for_tenant(
+class NoActiveRentError(Exception):
+    """Le locataire n'a aucun loyer actif (hors Garantie) : rien à facturer."""
+
+
+class ReceiptAlreadyExistsError(Exception):
+    """Une quittance existe déjà pour ce locataire et ce mois."""
+
+
+async def create_receipt_entry(
     db: AsyncSession, tenant: Tenant, year: int, month: int
-) -> None:
-    """Crée un RentReceipt + détails + PDF AvisEcheance pour un locataire."""
-    label = f"Tenant {tenant.id} ({((tenant.firstName or '') + ' ' + (tenant.name or '')).strip()})"
+) -> tuple[RentReceipt, list[RentsFee]]:
+    """
+    Crée l'entrée RentReceipt + ses lignes RentReceiptsDetail pour un mois donné.
+
+    Montant = somme des loyers actifs (hors Garantie) + frais ponctuels du mois.
+    Ne génère ni PDF ni email, ne commit pas (flush uniquement).
+
+    Lève NoActiveRentError si aucun loyer actif, ReceiptAlreadyExistsError si
+    une quittance existe déjà pour ce mois.
+    """
+    if await _receipt_exists(db, tenant.id, year, month):
+        raise ReceiptAlreadyExistsError()
 
     # Loyers actifs, hors Garantie
     rents = (
@@ -116,25 +133,25 @@ async def _create_receipt_for_tenant(
     ).scalars().all()
 
     if not rents:
-        logger.info("    %s: aucun loyer actif, ignoré", label)
-        return
+        raise NoActiveRentError()
 
     # Frais du mois (rentsFees dont applicationMonth est dans le mois year/month)
     period_begin = _period_begin(year, month)
     period_end = _period_end(year, month)
-    fees = (
-        await db.execute(
-            select(RentsFee).where(
-                RentsFee.tenantId == tenant.id,
-                RentsFee.applicationMonth >= period_begin,
-                RentsFee.applicationMonth <= period_end,
+    fees = list(
+        (
+            await db.execute(
+                select(RentsFee).where(
+                    RentsFee.tenantId == tenant.id,
+                    RentsFee.applicationMonth >= period_begin,
+                    RentsFee.applicationMonth <= period_end,
+                )
             )
-        )
-    ).scalars().all()
+        ).scalars().all()
+    )
 
     amount = sum(float(r.price or 0) for r in rents) + sum(float(f.price or 0) for f in fees)
 
-    # Créer la quittance
     receipt = RentReceipt(
         tenantId=tenant.id,
         placeUnitId=tenant.placeUnitId,
@@ -171,6 +188,25 @@ async def _create_receipt_for_tenant(
         )
         detail_order += 1
     await db.flush()
+
+    return receipt, fees
+
+
+async def _create_receipt_for_tenant(
+    db: AsyncSession, tenant: Tenant, year: int, month: int
+) -> None:
+    """Crée un RentReceipt + détails + PDF AvisEcheance pour un locataire."""
+    label = f"Tenant {tenant.id} ({((tenant.firstName or '') + ' ' + (tenant.name or '')).strip()})"
+
+    try:
+        receipt, fees = await create_receipt_entry(db, tenant, year, month)
+    except NoActiveRentError:
+        logger.info("    %s: aucun loyer actif, ignoré", label)
+        return
+    except ReceiptAlreadyExistsError:
+        logger.info("    %s: quittance déjà présente pour %d-%02d, ignoré", label, year, month)
+        return
+    amount = float(receipt.amount or 0)
 
     # Générer le PDF — AvisEcheance (non payé)
     FILES_DIR.mkdir(parents=True, exist_ok=True)

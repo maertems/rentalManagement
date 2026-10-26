@@ -92,6 +92,18 @@ export async function createRentReceipt(input: RentReceiptInput): Promise<RentRe
   return data;
 }
 
+/** Génère l'entrée en base d'une quittance (loyers actifs + frais du mois), sans PDF. */
+export async function generateRentReceipt(
+  tenantId: number,
+  month?: string, // YYYY-MM, mois courant par défaut
+): Promise<RentReceipt> {
+  const { data } = await httpClient.post<RentReceipt>("/api/v1/rentReceipts/generate", {
+    tenantId,
+    month: month || null,
+  });
+  return data;
+}
+
 export async function updateRentReceipt(
   id: number,
   input: RentReceiptInput,

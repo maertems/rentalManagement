@@ -20,6 +20,15 @@ class RentReceiptUpdate(RentReceiptBase):
     pass
 
 
+class RentReceiptGenerate(BaseModel):
+    tenantId: int
+    month: str | None = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}$",
+        description="Mois cible au format YYYY-MM (mois courant par défaut)",
+    )
+
+
 class RentReceiptRead(RentReceiptBase):
     id: int
     pdfFilename: str | None = None

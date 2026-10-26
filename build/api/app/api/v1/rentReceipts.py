@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
@@ -12,11 +13,15 @@ from app.models.placesUnit import PlacesUnit
 from app.models.tenant import Tenant
 from app.schemas.rentReceipt import (
     RentReceiptCreate, RentReceiptUpdate, RentReceiptRead, RentReceiptFilter,
+    RentReceiptGenerate,
 )
 from app.services.scope import get_owner_tenant_ids, assert_tenant_scope
 from app.services.pdf_context import get_receipt_context
 from app.services.pdf_generator import generate_receipt_pdf
 from app.services.email import send_pdf_email_sync
+from app.services.cron import (
+    NoActiveRentError, ReceiptAlreadyExistsError, create_receipt_entry,
+)
 
 MONTHS_FR = [
     "janvier", "février", "mars", "avril", "mai", "juin",
@@ -40,6 +45,57 @@ async def create_rent_receipt(
 ):
     await assert_tenant_scope(db, owner_ctx, payload.tenantId)
     return await crud_rent_receipt.create(db, payload)
+
+
+@router.post(
+    "/generate",
+    response_model=RentReceiptRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Générer l'entrée en base d'une quittance pour un locataire et un mois",
+)
+async def generate_rent_receipt(
+    payload: RentReceiptGenerate,
+    db: AsyncSession = Depends(get_db),
+    owner_ctx: Owner | None = Depends(get_owner_context),
+):
+    """
+    Crée la quittance (RentReceipt + lignes de détail) à partir des loyers actifs
+    du locataire et des frais du mois, comme le cron. Mois courant par défaut.
+    Ne génère ni PDF ni email.
+    """
+    await assert_tenant_scope(db, owner_ctx, payload.tenantId)
+    tenant = await db.get(Tenant, payload.tenantId)
+    if not tenant:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    if payload.month:
+        try:
+            year, month = (int(x) for x in payload.month.split("-"))
+            date(year, month, 1)
+        except ValueError:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="month invalide, format attendu YYYY-MM",
+            )
+    else:
+        today = date.today()
+        year, month = today.year, today.month
+
+    try:
+        receipt, _ = await create_receipt_entry(db, tenant, year, month)
+    except ReceiptAlreadyExistsError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=f"Une quittance existe déjà pour {year}-{month:02d}",
+        )
+    except NoActiveRentError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Aucun loyer actif pour ce locataire",
+        )
+    await db.commit()
+    await db.refresh(receipt)
+    return receipt
 
 
 @router.get("/{id}", response_model=RentReceiptRead)

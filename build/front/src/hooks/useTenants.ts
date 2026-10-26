@@ -114,6 +114,15 @@ export function useCreateRentReceipt() {
   });
 }
 
+export function useGenerateRentReceipt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tenantId, month }: { tenantId: number; month?: string }) =>
+      tenantsApi.generateRentReceipt(tenantId, month),
+    onSuccess: () => invalidateReceipts(qc),
+  });
+}
+
 export function useUpdateRentReceipt() {
   const qc = useQueryClient();
   return useMutation({
