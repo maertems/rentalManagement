@@ -195,8 +195,13 @@ async def get_occupancy(
                 tenantsByUnitId.setdefault(t.placeUnitId, []).append((t, None))
 
     paid_tenant_ids: set[int] = {
-        tid for tid, rec in receipt_by_tenant.items() if rec.paid == 1
+        tid for tid, rec in receipt_by_tenant.items()
+        if rec.paid == 1 or float(rec.amount or 0) == 0
     }
+    # Locataires actifs sans quittance dont le loyer total est 0
+    for t in active_without_receipt:
+        if fallback_by_tenant.get(t.id, 0.0) == 0.0:
+            paid_tenant_ids.add(t.id)
 
     # -----------------------------------------------------------------------
     # Construction de la réponse
