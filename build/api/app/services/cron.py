@@ -16,7 +16,8 @@ import calendar
 import logging
 import re
 import unicodedata
-from datetime import datetime, date
+from datetime import datetime, date, time
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 from sqlalchemy import select
@@ -74,23 +75,66 @@ def _next_period_begin(year: int, month: int) -> datetime:
     return datetime(year, month + 1, 1)
 
 
+def _occupied_window(
+    tenant: Tenant, year: int, month: int
+) -> tuple[date, date] | None:
+    """
+    Fenêtre d'occupation du locataire pour le mois demandé, bornée par
+    dateEntrance et dateExit (jours inclusifs). Retourne None si le locataire
+    n'occupe pas le logement sur ce mois.
+    """
+    _, last_day = calendar.monthrange(year, month)
+    month_start = date(year, month, 1)
+    month_end = date(year, month, last_day)
+
+    entrance = tenant.dateEntrance.date() if tenant.dateEntrance else None
+    exit_ = tenant.dateExit.date() if tenant.dateExit else None
+
+    # Locataire pas encore entré ou déjà sorti avant/après le mois
+    if entrance and entrance > month_end:
+        return None
+    if exit_ and exit_ < month_start:
+        return None
+    if entrance and exit_ and entrance > exit_:
+        return None
+
+    start = max(month_start, entrance) if entrance else month_start
+    end = min(month_end, exit_) if exit_ else month_end
+    return start, end
+
+
+def _prorate_price(price: float | Decimal | None, days: int, days_in_month: int) -> Decimal:
+    """Proratise un montant mensuel au nombre de jours occupés, arrondi au centime."""
+    monthly = Decimal(str(price or 0))
+    return (monthly * days / days_in_month).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+
+
 # ---------------------------------------------------------------------------
 # Idempotence
 # ---------------------------------------------------------------------------
 
 async def _receipt_exists(
-    db: AsyncSession, tenant_id: int, year: int, month: int
+    db: AsyncSession,
+    tenant_id: int,
+    year: int,
+    month: int,
+    exclude_receipt_id: int | None = None,
 ) -> bool:
-    """Retourne True si une quittance existe déjà pour ce locataire et ce mois."""
-    result = await db.execute(
-        select(RentReceipt)
-        .where(
-            RentReceipt.tenantId == tenant_id,
-            RentReceipt.periodBegin >= _period_begin(year, month),
-            RentReceipt.periodBegin < _next_period_begin(year, month),
-        )
-        .limit(1)
+    """
+    Retourne True si une quittance de loyer existe déjà pour ce locataire et ce
+    mois. Le reçu de dépôt de garantie (warantyReceiptId) est ignoré : ce n'est
+    pas une quittance de loyer et il ne doit pas bloquer la facturation du mois.
+    """
+    stmt = select(RentReceipt).where(
+        RentReceipt.tenantId == tenant_id,
+        RentReceipt.periodBegin >= _period_begin(year, month),
+        RentReceipt.periodBegin < _next_period_begin(year, month),
     )
+    if exclude_receipt_id is not None:
+        stmt = stmt.where(RentReceipt.id != exclude_receipt_id)
+    result = await db.execute(stmt.limit(1))
     return result.scalars().first() is not None
 
 
@@ -106,6 +150,10 @@ class ReceiptAlreadyExistsError(Exception):
     """Une quittance existe déjà pour ce locataire et ce mois."""
 
 
+class TenantNotInPeriodError(Exception):
+    """Le locataire n'occupe pas le logement sur le mois demandé (entrée/sortie)."""
+
+
 async def create_receipt_entry(
     db: AsyncSession, tenant: Tenant, year: int, month: int
 ) -> tuple[RentReceipt, list[RentsFee]]:
@@ -113,13 +161,28 @@ async def create_receipt_entry(
     Crée l'entrée RentReceipt + ses lignes RentReceiptsDetail pour un mois donné.
 
     Montant = somme des loyers actifs (hors Garantie) + frais ponctuels du mois.
+    Si le locataire entre ou sort en cours de mois (dateEntrance / dateExit),
+    les loyers et charges sont proratisés au nombre de jours occupés ; les frais
+    ponctuels restent facturés en totalité. La période de la quittance est alors
+    bornée aux dates d'occupation.
     Ne génère ni PDF ni email, ne commit pas (flush uniquement).
 
     Lève NoActiveRentError si aucun loyer actif, ReceiptAlreadyExistsError si
-    une quittance existe déjà pour ce mois.
+    une quittance existe déjà pour ce mois, TenantNotInPeriodError si le
+    locataire n'occupe pas le logement sur ce mois.
     """
-    if await _receipt_exists(db, tenant.id, year, month):
+    if await _receipt_exists(
+        db, tenant.id, year, month, exclude_receipt_id=tenant.warantyReceiptId
+    ):
         raise ReceiptAlreadyExistsError()
+
+    window = _occupied_window(tenant, year, month)
+    if window is None:
+        raise TenantNotInPeriodError()
+    occupied_begin, occupied_end = window
+    days_in_month = calendar.monthrange(year, month)[1]
+    days_occupied = (occupied_end - occupied_begin).days + 1
+    is_prorated = days_occupied < days_in_month
 
     # Loyers actifs, hors Garantie
     rents = (
@@ -150,15 +213,27 @@ async def create_receipt_entry(
         ).scalars().all()
     )
 
-    amount = sum(float(r.price or 0) for r in rents) + sum(float(f.price or 0) for f in fees)
+    # Montant de chaque ligne récurrente (loyer / charges) — proratisé si besoin
+    rent_prices: dict[int, Decimal] = {
+        rent.id: (
+            _prorate_price(rent.price, days_occupied, days_in_month)
+            if is_prorated
+            else Decimal(str(rent.price or 0)).quantize(Decimal("0.01"))
+        )
+        for rent in rents
+    }
+
+    amount = sum(rent_prices.values(), Decimal("0.00")) + sum(
+        (Decimal(str(f.price or 0)) for f in fees), Decimal("0.00")
+    )
 
     receipt = RentReceipt(
         tenantId=tenant.id,
         placeUnitId=tenant.placeUnitId,
         placeUnitRoomId=tenant.placeUnitRoomId,
         amount=amount,
-        periodBegin=period_begin,
-        periodEnd=period_end,
+        periodBegin=datetime.combine(occupied_begin, time.min),
+        periodEnd=datetime.combine(occupied_end, time.min),
         paid=0,
     )
     db.add(receipt)
@@ -173,7 +248,7 @@ async def create_receipt_entry(
                 rentReceiptsId=receipt.id,
                 sortOrder=detail_order,
                 description=rent.type,
-                price=rent.price,
+                price=rent_prices[rent.id],
             )
         )
         detail_order += 1
@@ -205,6 +280,11 @@ async def _create_receipt_for_tenant(
         return
     except ReceiptAlreadyExistsError:
         logger.info("    %s: quittance déjà présente pour %d-%02d, ignoré", label, year, month)
+        return
+    except TenantNotInPeriodError:
+        logger.info(
+            "    %s: hors période d'occupation pour %d-%02d, ignoré", label, year, month
+        )
         return
     amount = float(receipt.amount or 0)
 
@@ -346,7 +426,13 @@ async def run_daily_receipt_generation() -> None:
                     ).scalars().all()
 
                     for tenant in tenants:
-                        if await _receipt_exists(db, tenant.id, target_year, target_month):
+                        if await _receipt_exists(
+                            db,
+                            tenant.id,
+                            target_year,
+                            target_month,
+                            exclude_receipt_id=tenant.warantyReceiptId,
+                        ):
                             logger.info(
                                 "    Tenant %d : quittance déjà présente pour %d-%02d, ignoré",
                                 tenant.id, target_year, target_month,

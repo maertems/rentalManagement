@@ -20,7 +20,10 @@ from app.services.pdf_context import get_receipt_context
 from app.services.pdf_generator import generate_receipt_pdf
 from app.services.email import send_pdf_email_sync
 from app.services.cron import (
-    NoActiveRentError, ReceiptAlreadyExistsError, create_receipt_entry,
+    NoActiveRentError,
+    ReceiptAlreadyExistsError,
+    TenantNotInPeriodError,
+    create_receipt_entry,
 )
 
 MONTHS_FR = [
@@ -92,6 +95,14 @@ async def generate_rent_receipt(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             detail="Aucun loyer actif pour ce locataire",
+        )
+    except TenantNotInPeriodError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Le locataire n'occupe pas le logement sur ce mois "
+                "(date d'entrée / de sortie)"
+            ),
         )
     await db.commit()
     await db.refresh(receipt)
