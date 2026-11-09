@@ -212,7 +212,7 @@ function ReceiptRow({
             >
               <Eye className="h-4 w-4 text-muted-foreground" />
             </Button>
-            {!isGarantie && r.paid && (
+            {!isGarantie && r.paid === 1 ? (
               <Button
                 variant="ghost"
                 size="icon"
@@ -222,6 +222,9 @@ function ReceiptRow({
               >
                 <FileText className="h-4 w-4 text-muted-foreground" />
               </Button>
+            ) : (
+              // Emplacement réservé : garde l'œil aligné sur toutes les lignes.
+              <span className="h-9 w-9" aria-hidden="true" />
             )}
           </div>
         </td>
@@ -318,7 +321,7 @@ export function TenantReceiptsDialog({ open, onOpenChange, tenant }: Props) {
                     <th className="px-3 py-2 font-medium">Fin</th>
                     <th className="px-3 py-2 font-medium text-right">Montant</th>
                     <th className="px-3 py-2 font-medium text-center">Payé</th>
-                    <th className="w-[100px] px-3 py-2"></th>
+                    <th className="w-[104px] px-3 py-2"></th>
                     <th className="w-[44px] px-3 py-2"></th>
                   </tr>
                 </thead>
