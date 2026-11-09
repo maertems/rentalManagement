@@ -111,10 +111,10 @@ async def test_entrance_mid_month_prorates_from_entrance_date(
 
     assert body["periodBegin"] == "2026-04-15T00:00:00"
     assert body["periodEnd"] == "2026-04-30T00:00:00"
-    assert float(body["amount"]) == 480.00  # 426.67 + 53.33
+    assert float(body["amount"]) == 479.00  # 426 + 53 (euro inférieur)
 
     details = await _details(authedClient, body["id"])
-    assert details == {"Loyer": 426.67, "Charges": 53.33}
+    assert details == {"Loyer": 426.00, "Charges": 53.00}
 
 
 async def test_exit_after_month_keeps_full_amount(authedClient: AsyncClient):

@@ -17,7 +17,7 @@ import logging
 import re
 import unicodedata
 from datetime import datetime, date, time
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_FLOOR
 from pathlib import Path
 
 from sqlalchemy import select
@@ -103,12 +103,15 @@ def _occupied_window(
     return start, end
 
 
+def _round_euro(price: float | Decimal | None) -> Decimal:
+    """Arrondit un montant à l'euro inférieur (aucun centime sur les lignes)."""
+    return Decimal(str(price or 0)).quantize(Decimal("1"), rounding=ROUND_FLOOR)
+
+
 def _prorate_price(price: float | Decimal | None, days: int, days_in_month: int) -> Decimal:
-    """Proratise un montant mensuel au nombre de jours occupés, arrondi au centime."""
+    """Proratise un montant mensuel au nombre de jours occupés, arrondi à l'euro inférieur."""
     monthly = Decimal(str(price or 0))
-    return (monthly * days / days_in_month).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
+    return _round_euro(monthly * days / days_in_month)
 
 
 # ---------------------------------------------------------------------------
@@ -162,9 +165,9 @@ async def create_receipt_entry(
 
     Montant = somme des loyers actifs (hors Garantie) + frais ponctuels du mois.
     Si le locataire entre ou sort en cours de mois (dateEntrance / dateExit),
-    les loyers et charges sont proratisés au nombre de jours occupés ; les frais
-    ponctuels restent facturés en totalité. La période de la quittance est alors
-    bornée aux dates d'occupation.
+    les loyers et charges sont proratisés au nombre de jours occupés et arrondis
+    à l'euro inférieur ; les frais ponctuels restent facturés en totalité, tels
+    quels. La période de la quittance est alors bornée aux dates d'occupation.
     Ne génère ni PDF ni email, ne commit pas (flush uniquement).
 
     Lève NoActiveRentError si aucun loyer actif, ReceiptAlreadyExistsError si
@@ -213,12 +216,13 @@ async def create_receipt_entry(
         ).scalars().all()
     )
 
-    # Montant de chaque ligne récurrente (loyer / charges) — proratisé si besoin
+    # Montant de chaque ligne récurrente (loyer / charges) — proratisé si besoin,
+    # toujours arrondi à l'euro inférieur (pas de centimes sur les lignes).
     rent_prices: dict[int, Decimal] = {
         rent.id: (
             _prorate_price(rent.price, days_occupied, days_in_month)
             if is_prorated
-            else Decimal(str(rent.price or 0)).quantize(Decimal("0.01"))
+            else _round_euro(rent.price)
         )
         for rent in rents
     }
