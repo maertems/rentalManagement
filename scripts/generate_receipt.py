@@ -33,6 +33,7 @@ import calendar
 import smtplib
 import sys
 from datetime import date, datetime
+from decimal import Decimal, ROUND_FLOOR
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -95,6 +96,47 @@ def parse_month(month_str: str | None) -> tuple[date, date]:
 
 def fmt_price(amount: float) -> str:
     return f"{amount:,.2f} €".replace(",", " ")
+
+
+def _as_date(value) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def occupied_window(tenant: dict, first: date, last: date) -> tuple[date, date] | None:
+    """Fenêtre d'occupation du locataire sur le mois, jours inclusifs."""
+    entrance = _as_date(tenant.get("dateEntrance"))
+    exit_ = _as_date(tenant.get("dateExit"))
+
+    if entrance and entrance > last:
+        return None
+    if exit_ and exit_ < first:
+        return None
+    if entrance and exit_ and entrance > exit_:
+        return None
+
+    start = max(first, entrance) if entrance else first
+    end = min(last, exit_) if exit_ else last
+    return start, end
+
+
+def round_euro(price: float | None) -> int:
+    """Arrondi à l'euro inférieur (aucun centime sur les lignes)."""
+    return int(
+        Decimal(str(price or 0)).quantize(Decimal("1"), rounding=ROUND_FLOOR)
+    )
+
+
+def prorate_price(price: float | None, days: int, days_in_month: int) -> int:
+    """Prorata mensuel arrondi à l'euro inférieur."""
+    return int(
+        (Decimal(str(price or 0)) * days / days_in_month).quantize(
+            Decimal("1"), rounding=ROUND_FLOOR
+        )
+    )
 
 
 RENT_TYPE_ORDER = {"Loyer": 1, "Charges": 2}
@@ -303,14 +345,45 @@ def main() -> None:
                 sys.exit(1)
 
             rents.sort(key=lambda r: (RENT_TYPE_ORDER.get(r.get("type") or "", 99), r["id"]))
-            total = sum(float(r["price"] or 0) for r in rents)
+
+            window = occupied_window(tenant, period_begin, period_end)
+            if window is None:
+                print(
+                    f"\nAvertissement : le locataire n'occupe pas le logement sur "
+                    f"{period_begin.strftime('%Y-%m')} (entrée/sortie). Abandon."
+                )
+                sys.exit(0)
+
+            occupied_begin, occupied_end = window
+            days_in_month = calendar.monthrange(period_begin.year, period_begin.month)[1]
+            days_occupied = (occupied_end - occupied_begin).days + 1
+            is_prorated = days_occupied < days_in_month
+
+            priced_rents = [
+                (
+                    r,
+                    prorate_price(r["price"], days_occupied, days_in_month)
+                    if is_prorated
+                    else round_euro(r["price"]),
+                )
+                for r in rents
+            ]
+            total = sum(price for _, price in priced_rents)
 
             # --- Résumé -----------------------------------------------
-            print(f"\nPériode : {period_begin.strftime('%d/%m/%Y')} → {period_end.strftime('%d/%m/%Y')}")
+            print(
+                f"\nPériode : {occupied_begin.strftime('%d/%m/%Y')} → "
+                f"{occupied_end.strftime('%d/%m/%Y')}"
+                + (
+                    f" (prorata {days_occupied}/{days_in_month} jours)"
+                    if is_prorated
+                    else ""
+                )
+            )
             print("Lignes de détail :")
-            for i, r in enumerate(rents, 1):
-                print(f"  {i}. [{r['type']}] {fmt_price(float(r['price'] or 0))}")
-            print(f"  Total : {fmt_price(total)}")
+            for i, (r, price) in enumerate(priced_rents, 1):
+                print(f"  {i}. [{r['type']}] {fmt_price(float(price))}")
+            print(f"  Total : {fmt_price(float(total))}")
 
             send_email_flag = bool(tenant.get("sendNoticeOfLeaseRental"))
             print(f"\nEnvoi email : {'oui' if send_email_flag else 'non (sendNoticeOfLeaseRental = 0)'}")
@@ -338,18 +411,18 @@ def main() -> None:
                     tenant.get("placeUnitId"),
                     tenant.get("placeUnitRoomId"),
                     total,
-                    datetime(period_begin.year, period_begin.month, period_begin.day).strftime("%Y-%m-%d %H:%M:%S.000"),
-                    datetime(period_end.year, period_end.month, period_end.day).strftime("%Y-%m-%d %H:%M:%S.000"),
+                    datetime(occupied_begin.year, occupied_begin.month, occupied_begin.day).strftime("%Y-%m-%d %H:%M:%S.000"),
+                    datetime(occupied_end.year, occupied_end.month, occupied_end.day).strftime("%Y-%m-%d %H:%M:%S.000"),
                     now, now,
                 ),
             )
             receipt_id = cur.lastrowid
             print(f"\nrentReceipt créé : id={receipt_id}")
 
-            for i, r in enumerate(rents, 1):
+            for i, (r, price) in enumerate(priced_rents, 1):
                 cur.execute(
                     "INSERT INTO rentReceiptsDetail (rentReceiptsId, sortOrder, description, price, createdAt, updatedAt) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (receipt_id, i, r["type"], float(r["price"] or 0), now, now),
+                    (receipt_id, i, r["type"], float(price), now, now),
                 )
             print(f"{len(rents)} ligne(s) de détail créée(s).")
             conn.commit()
