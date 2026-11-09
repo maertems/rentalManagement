@@ -126,8 +126,19 @@ export async function listReceiptDetails(receiptId: number): Promise<RentReceipt
   return data;
 }
 
-export async function downloadReceiptPdf(id: number): Promise<Blob> {
+export type ReceiptDocType = "quittance" | "avis" | "garantie";
+
+/**
+ * Récupère le PDF d'une quittance. Sans `docType`, le serveur renvoie le PDF
+ * stocké s'il existe, sinon le génère à la volée (sans le stocker). Avec
+ * `docType`, le document demandé est généré à la volée s'il n'est pas stocké.
+ */
+export async function downloadReceiptPdf(
+  id: number,
+  docType?: ReceiptDocType,
+): Promise<Blob> {
   const { data } = await httpClient.get(`/api/v1/rentReceipts/${id}/pdf`, {
+    params: docType ? { doc_type: docType } : undefined,
     responseType: "blob",
   });
   return data as Blob;

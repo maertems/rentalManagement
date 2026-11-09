@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { CheckCircle2, Eye, FilePlus2, Receipt, Trash2, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Eye,
+  FilePlus2,
+  FileText,
+  Receipt,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -104,7 +112,13 @@ function DeleteConfirmDialog({
 // Ligne de quittance
 // ---------------------------------------------------------------------------
 
-function ReceiptRow({ r }: { r: RentReceipt }) {
+function ReceiptRow({
+  r,
+  isGarantie,
+}: {
+  r: RentReceipt;
+  isGarantie: boolean;
+}) {
   const updateMut = useUpdateRentReceipt();
   const deleteMut = useDeleteRentReceipt();
   const downloadMut = useDownloadReceiptPdf();
@@ -136,14 +150,16 @@ function ReceiptRow({ r }: { r: RentReceipt }) {
     }
   }
 
-  async function handleViewPdf() {
+  async function handleViewPdf(
+    docType?: "quittance" | "avis" | "garantie",
+  ) {
     try {
-      const blob = await downloadMut.mutateAsync(r.id);
+      const blob = await downloadMut.mutateAsync({ id: r.id, docType });
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 10000);
-    } catch {
-      toast.error("PDF non disponible — générez-le d'abord via POST /{id}/pdf");
+    } catch (err) {
+      toast.error(getApiErrorMessage(err));
     }
   }
 
@@ -176,9 +192,38 @@ function ReceiptRow({ r }: { r: RentReceipt }) {
           </button>
         </td>
         <td className="px-3 py-2 text-center">
-          <Button variant="ghost" size="icon" onClick={() => void handleViewPdf()} disabled={downloadMut.isPending} title="Voir le PDF">
-            <Eye className="h-4 w-4 text-muted-foreground" />
-          </Button>
+          <div className="flex items-center justify-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() =>
+                void handleViewPdf(
+                  isGarantie ? "garantie" : r.paid ? "quittance" : "avis",
+                )
+              }
+              disabled={downloadMut.isPending}
+              title={
+                isGarantie
+                  ? "Voir le reçu de dépôt de garantie"
+                  : r.paid
+                    ? "Voir la quittance de loyer"
+                    : "Voir l'avis d'échéance"
+              }
+            >
+              <Eye className="h-4 w-4 text-muted-foreground" />
+            </Button>
+            {!isGarantie && r.paid && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => void handleViewPdf("avis")}
+                disabled={downloadMut.isPending}
+                title="Voir l'avis d'échéance"
+              >
+                <FileText className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            )}
+          </div>
         </td>
         <td className="px-3 py-2 text-center">
           {!r.paid && (
@@ -273,13 +318,17 @@ export function TenantReceiptsDialog({ open, onOpenChange, tenant }: Props) {
                     <th className="px-3 py-2 font-medium">Fin</th>
                     <th className="px-3 py-2 font-medium text-right">Montant</th>
                     <th className="px-3 py-2 font-medium text-center">Payé</th>
-                    <th className="w-[44px] px-3 py-2"></th>
+                    <th className="w-[100px] px-3 py-2"></th>
                     <th className="w-[44px] px-3 py-2"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {data.map((r) => (
-                    <ReceiptRow key={r.id} r={r} />
+                    <ReceiptRow
+                      key={r.id}
+                      r={r}
+                      isGarantie={tenant?.warantyReceiptId === r.id}
+                    />
                   ))}
                 </tbody>
               </table>

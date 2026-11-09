@@ -218,35 +218,83 @@ async def generate_pdf(
 
 @router.get(
     "/{id}/pdf",
-    summary="Télécharger le PDF d'une quittance (doit avoir été généré via POST au préalable)",
+    summary="Consulter le PDF d'une quittance (généré à la volée si absent, non stocké)",
 )
 async def download_pdf(
     id: int,
+    doc_type: str | None = Query(
+        default=None,
+        description=(
+            "Type de document à consulter : quittance | avis | garantie. "
+            "Si absent : PDF stocké s'il existe, sinon génération automatique."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
     owner_ctx: Owner | None = Depends(get_owner_context),
 ):
+    """
+    Sert le PDF stocké s'il existe. Sinon (ou si un type précis est demandé),
+    le PDF est généré en mémoire et renvoyé sans être écrit sur le serveur.
+    """
     obj = await crud_rent_receipt.get(db, id)
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="RentReceipt not found")
     await assert_tenant_scope(db, owner_ctx, obj.tenantId)
 
-    if not obj.pdfFilename:
+    if doc_type is not None and doc_type not in ("quittance", "avis", "garantie"):
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail="PDF not generated yet. Call POST /{id}/pdf first.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="doc_type invalide : quittance | avis | garantie",
         )
 
-    file_path = FILES_DIR / obj.pdfFilename
-    if not file_path.exists():
+    # Aucun type demandé et PDF déjà stocké → on sert le fichier existant.
+    if doc_type is None and obj.pdfFilename:
+        file_path = FILES_DIR / obj.pdfFilename
+        if file_path.exists():
+            return FileResponse(
+                path=str(file_path),
+                media_type="application/pdf",
+                filename=obj.pdfFilename,
+            )
+
+    # Le reçu de dépôt de garantie peut ne pas avoir de lignes de détail
+    # "Garantie" : on le reconnaît aussi via tenant.warantyReceiptId.
+    tenant = await db.get(Tenant, obj.tenantId) if obj.tenantId else None
+    is_warranty_receipt = bool(
+        tenant and tenant.warantyReceiptId == obj.id
+    )
+    effective_doc_type = doc_type
+    if effective_doc_type is None and is_warranty_receipt:
+        effective_doc_type = "garantie"
+
+    ctx = await get_receipt_context(db, id, doc_type_override=effective_doc_type)
+    is_garantie = ctx.is_garantie or is_warranty_receipt
+
+    if effective_doc_type == "garantie" and not is_garantie:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail=f"PDF file missing on disk: {obj.pdfFilename}",
+            status.HTTP_400_BAD_REQUEST,
+            detail="Cette quittance n'est pas un reçu de dépôt de garantie",
+        )
+    if effective_doc_type == "quittance" and not obj.paid and not is_garantie:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Quittance indisponible : le loyer n'est pas marqué payé",
         )
 
-    return FileResponse(
-        path=str(file_path),
+    file_path = FILES_DIR / ctx.filename
+    if file_path.exists():
+        return FileResponse(
+            path=str(file_path),
+            media_type="application/pdf",
+            filename=ctx.filename,
+        )
+
+    # Génération à la volée : rien n'est écrit sur le disque ni en base.
+    pdf_bytes = generate_receipt_pdf(ctx, doc_type_override=effective_doc_type)
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
-        filename=obj.pdfFilename,
+        headers={"Content-Disposition": f'inline; filename="{ctx.filename}"'},
     )
 
 

@@ -142,7 +142,13 @@ export function useDeleteRentReceipt() {
 
 export function useDownloadReceiptPdf() {
   return useMutation({
-    mutationFn: (id: number) => tenantsApi.downloadReceiptPdf(id),
+    mutationFn: ({
+      id,
+      docType,
+    }: {
+      id: number;
+      docType?: tenantsApi.ReceiptDocType;
+    }) => tenantsApi.downloadReceiptPdf(id, docType),
   });
 }
 

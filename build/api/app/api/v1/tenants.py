@@ -8,6 +8,7 @@ from app.crud.tenant import crud_tenant
 from app.models.tenant import Tenant
 from app.models.rent import Rent
 from app.models.rentReceipt import RentReceipt
+from app.models.rentReceiptsDetail import RentReceiptsDetail
 from app.models.placesUnit import PlacesUnit
 from app.models.placesUnitsRoom import PlacesUnitsRoom
 from app.models.owner import Owner
@@ -79,6 +80,15 @@ async def create_tenant_full(
         )
         db.add(caution_receipt)
         await db.flush()
+        # Ligne de détail indispensable à la génération du reçu de garantie
+        db.add(
+            RentReceiptsDetail(
+                rentReceiptsId=caution_receipt.id,
+                sortOrder=1,
+                description="Garantie",
+                price=payload.cautionReceipt.amount,
+            )
+        )
         tenant.warantyReceiptId = caution_receipt.id
 
     await db.commit()
