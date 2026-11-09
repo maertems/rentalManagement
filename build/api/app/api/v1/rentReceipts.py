@@ -2,7 +2,6 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
-from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -137,6 +136,28 @@ async def list_rent_receipts(
     return rows
 
 
+# Champs dont une modification rend le PDF stocké obsolète.
+_PDF_FIELDS = {
+    "amount",
+    "periodBegin",
+    "periodEnd",
+    "paid",
+    "tenantId",
+    "placeUnitId",
+    "placeUnitRoomId",
+}
+
+
+def _remove_stored_pdf(filename: str | None) -> None:
+    """Supprime un PDF stocké s'il existe (le fichier est optionnel)."""
+    if not filename:
+        return
+    try:
+        (FILES_DIR / filename).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 @router.patch("/{id}", response_model=RentReceiptRead)
 async def update_rent_receipt(
     id: int,
@@ -148,7 +169,17 @@ async def update_rent_receipt(
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="RentReceipt not found")
     await assert_tenant_scope(db, owner_ctx, obj.tenantId)
-    return await crud_rent_receipt.update(db, obj, payload)
+
+    changes = payload.model_dump(exclude_unset=True)
+    updated = await crud_rent_receipt.update(db, obj, payload)
+
+    # Le PDF stocké ne correspond plus aux données → on l'invalide.
+    if any(k in changes for k in _PDF_FIELDS) and updated.pdfFilename:
+        _remove_stored_pdf(updated.pdfFilename)
+        updated.pdfFilename = None
+        await db.commit()
+        await db.refresh(updated)
+    return updated
 
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -161,7 +192,9 @@ async def delete_rent_receipt(
     if not obj:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="RentReceipt not found")
     await assert_tenant_scope(db, owner_ctx, obj.tenantId)
+    filename = obj.pdfFilename
     await crud_rent_receipt.delete_by_id(db, id)
+    _remove_stored_pdf(filename)
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +204,7 @@ async def delete_rent_receipt(
 @router.post(
     "/{id}/pdf",
     status_code=status.HTTP_201_CREATED,
-    summary="Générer le PDF d'une quittance (immuable une fois créé)",
+    summary="Générer le PDF d'une quittance depuis la base (écrase l'ancien fichier)",
 )
 async def generate_pdf(
     id: int,
@@ -179,7 +212,10 @@ async def generate_pdf(
         default=None,
         description="Forcer le type : quittance | avis | garantie (auto-détecté par défaut)",
     ),
-    force: bool = Query(default=False, description="Régénérer le PDF même s'il existe déjà"),
+    force: bool = Query(
+        default=False,
+        description="Conservé pour compatibilité : le PDF est toujours régénéré",
+    ),
     db: AsyncSession = Depends(get_db),
     owner_ctx: Owner | None = Depends(get_owner_context),
 ):
@@ -190,26 +226,15 @@ async def generate_pdf(
 
     ctx = await get_receipt_context(db, id, doc_type_override=doc_type)
 
+    # Toujours régénéré depuis la base : un fichier existant sous le même nom
+    # peut être obsolète (quittance supprimée/recréée, date de sortie modifiée…).
     FILES_DIR.mkdir(parents=True, exist_ok=True)
     file_path = FILES_DIR / ctx.filename
-
-    if file_path.exists():
-        if force:
-            file_path.unlink()
-        elif obj.pdfFilename == ctx.filename:
-            # Already generated and linked — idempotent, just return
-            return {"filename": ctx.filename, "path": f"/files/{ctx.filename}"}
-        else:
-            # File exists on disk but not linked to this receipt (orphan from deleted receipt).
-            # Re-link without regenerating.
-            obj.pdfFilename = ctx.filename
-            await db.commit()
-            return {"filename": ctx.filename, "path": f"/files/{ctx.filename}"}
-
     pdf_bytes = generate_receipt_pdf(ctx, doc_type_override=doc_type)
     file_path.write_bytes(pdf_bytes)
 
-    # Persist the filename so GET /pdf can find it unambiguously
+    # Persiste le nom du fichier (archive / pièce jointe email).
+    # La consultation GET /pdf, elle, régénère toujours depuis la base.
     obj.pdfFilename = ctx.filename
     await db.commit()
 
@@ -218,7 +243,7 @@ async def generate_pdf(
 
 @router.get(
     "/{id}/pdf",
-    summary="Consulter le PDF d'une quittance (généré à la volée si absent, non stocké)",
+    summary="Consulter le PDF d'une quittance (toujours généré depuis la base, non stocké)",
 )
 async def download_pdf(
     id: int,
@@ -226,15 +251,15 @@ async def download_pdf(
         default=None,
         description=(
             "Type de document à consulter : quittance | avis | garantie. "
-            "Si absent : PDF stocké s'il existe, sinon génération automatique."
+            "Si absent : type déduit automatiquement du statut de la quittance."
         ),
     ),
     db: AsyncSession = Depends(get_db),
     owner_ctx: Owner | None = Depends(get_owner_context),
 ):
     """
-    Sert le PDF stocké s'il existe. Sinon (ou si un type précis est demandé),
-    le PDF est généré en mémoire et renvoyé sans être écrit sur le serveur.
+    Recharge la quittance et ses lignes depuis la base, génère le PDF demandé
+    en mémoire et le renvoie, sans jamais écrire de fichier sur le serveur.
     """
     obj = await crud_rent_receipt.get(db, id)
     if not obj:
@@ -246,16 +271,6 @@ async def download_pdf(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="doc_type invalide : quittance | avis | garantie",
         )
-
-    # Aucun type demandé et PDF déjà stocké → on sert le fichier existant.
-    if doc_type is None and obj.pdfFilename:
-        file_path = FILES_DIR / obj.pdfFilename
-        if file_path.exists():
-            return FileResponse(
-                path=str(file_path),
-                media_type="application/pdf",
-                filename=obj.pdfFilename,
-            )
 
     # Le reçu de dépôt de garantie peut ne pas avoir de lignes de détail
     # "Garantie" : on le reconnaît aussi via tenant.warantyReceiptId.
@@ -281,15 +296,9 @@ async def download_pdf(
             detail="Quittance indisponible : le loyer n'est pas marqué payé",
         )
 
-    file_path = FILES_DIR / ctx.filename
-    if file_path.exists():
-        return FileResponse(
-            path=str(file_path),
-            media_type="application/pdf",
-            filename=ctx.filename,
-        )
-
-    # Génération à la volée : rien n'est écrit sur le disque ni en base.
+    # Le PDF est toujours reconstruit à partir des données en base : un ancien
+    # fichier stocké sous le même nom (mois + type) pourrait être obsolète.
+    # Rien n'est écrit sur le disque ni en base.
     pdf_bytes = generate_receipt_pdf(ctx, doc_type_override=effective_doc_type)
     return Response(
         content=pdf_bytes,
@@ -312,16 +321,10 @@ async def send_receipt_email(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="RentReceipt not found")
     await assert_tenant_scope(db, owner_ctx, obj.tenantId)
 
-    if not obj.pdfFilename:
+    if doc_type not in ("quittance", "avis", "garantie"):
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail="PDF not generated yet. Call POST /{id}/pdf first.",
-        )
-    file_path = FILES_DIR / obj.pdfFilename
-    if not file_path.exists():
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail=f"PDF file missing on disk: {obj.pdfFilename}",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"doc_type invalide '{doc_type}'. Valeurs acceptées : quittance, avis, garantie",
         )
 
     tenant = await db.get(Tenant, obj.tenantId)
@@ -335,9 +338,11 @@ async def send_receipt_email(
     if not tenant_email:
         return {"sent": False, "reason": "pas d'email locataire"}
 
-    ctx = await get_receipt_context(db, id)
+    # PDF reconstruit depuis la base au moment de l'envoi (jamais un fichier obsolète).
+    ctx = await get_receipt_context(db, id, doc_type_override=doc_type)
     if not ctx.owner_email:
         return {"sent": False, "reason": "pas d'email propriétaire"}
+    pdf_bytes = generate_receipt_pdf(ctx, doc_type_override=doc_type)
 
     period_begin = obj.periodBegin
     month_name = MONTHS_FR[period_begin.month - 1] if period_begin else ""
@@ -350,11 +355,9 @@ async def send_receipt_email(
     elif doc_type == "quittance":
         subject = "Quittance de loyer"
         body = f"Bonjour,\n\nVous trouverez ci-joint la quittance pour le loyer du mois de {month_name} {year}.\nVous souhaitant bonne réception.\n\nBonne journée,\n{ctx.owner_name}\n"
-    elif doc_type == "avis":
+    else:
         subject = "Avis d'échéance"
         body = f"Bonjour,\n\nVous trouverez ci-joint l'avis d'échéance du mois de {month_name} {year}.\nVous souhaitant bonne réception.\n\nBonne journée,\n{ctx.owner_name}\n"
-    else:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"doc_type invalide '{doc_type}'. Valeurs acceptées : quittance, avis, garantie")
 
     unit_obj = await db.get(PlacesUnit, tenant.placeUnitId) if tenant.placeUnitId else None
     if unit_obj and unit_obj.friendlyName:
@@ -368,8 +371,8 @@ async def send_receipt_email(
         to_name=tenant_name,
         subject=subject,
         body=body,
-        pdf_bytes=file_path.read_bytes(),
-        pdf_filename=obj.pdfFilename,
+        pdf_bytes=pdf_bytes,
+        pdf_filename=ctx.filename,
         property_name=f"{ctx.unit_zip}-{ctx.place_name}",
     )
 

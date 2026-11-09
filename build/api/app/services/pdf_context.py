@@ -145,10 +145,12 @@ async def get_receipt_context(
             extras.append(DetailLine(description=desc, price=price))
     details = [loyer_line, charges_line] + extras
 
-    # Consistency check: sum of detail lines must match receipt.amount
+    # Consistency check: sum of detail lines must match receipt.amount.
+    # Les anciens reçus de garantie peuvent ne pas avoir de ligne de détail :
+    # on ne bloque alors pas la génération (le montant reste dans amount).
     details_sum = sum(float(d.price or 0) for d in details_rows)
     receipt_amount = float(receipt.amount) if receipt.amount is not None else 0.0
-    if abs(details_sum - receipt_amount) > 0.01:
+    if details_rows and abs(details_sum - receipt_amount) > 0.01:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail=(
